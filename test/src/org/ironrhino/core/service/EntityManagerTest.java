@@ -21,11 +21,11 @@ import javax.persistence.PrePersist;
 import javax.persistence.PreRemove;
 import javax.persistence.PreUpdate;
 
-import org.hibernate.Query;
 import org.hibernate.Session;
 import org.hibernate.criterion.DetachedCriteria;
 import org.hibernate.criterion.Order;
 import org.hibernate.criterion.Restrictions;
+import org.hibernate.query.Query;
 import org.ironrhino.common.model.Gender;
 import org.ironrhino.core.model.ResultPage;
 import org.ironrhino.core.service.BaseManager.IterateCallback;
@@ -229,10 +229,10 @@ public class EntityManagerTest {
 		Person person = entityManager.executeFind(new HibernateCallback<Person>() {
 			@Override
 			public Person doInHibernate(Session session) {
-				Query q = session.createQuery("from Person p where p.name=:name");
-				q.setString("name", "test0");
+				Query<Person> q = session.createQuery("from Person p where p.name=:name", Person.class);
+				q.setParameter("name", "test0");
 				q.setMaxResults(1);
-				return (Person) q.uniqueResult();
+				return q.uniqueResult();
 			}
 		});
 		assertEquals("test0", person.getName());

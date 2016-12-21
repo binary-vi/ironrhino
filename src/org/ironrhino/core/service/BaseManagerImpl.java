@@ -13,6 +13,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.CriteriaQuery;
+import javax.persistence.criteria.Root;
+
 import org.apache.commons.lang3.StringUtils;
 import org.hibernate.CacheMode;
 import org.hibernate.Criteria;
@@ -20,7 +24,6 @@ import org.hibernate.FlushMode;
 import org.hibernate.Hibernate;
 import org.hibernate.LockOptions;
 import org.hibernate.ObjectNotFoundException;
-import org.hibernate.Query;
 import org.hibernate.ScrollMode;
 import org.hibernate.ScrollableResults;
 import org.hibernate.Session;
@@ -34,6 +37,7 @@ import org.hibernate.criterion.Projections;
 import org.hibernate.criterion.Restrictions;
 import org.hibernate.internal.CriteriaImpl;
 import org.hibernate.internal.CriteriaImpl.OrderEntry;
+import org.hibernate.query.Query;
 import org.hibernate.resource.transaction.spi.TransactionStatus;
 import org.hibernate.transform.ResultTransformer;
 import org.ironrhino.core.model.BaseTreeableEntity;
@@ -109,12 +113,12 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 			final BaseTreeableEntity entity = (BaseTreeableEntity) obj;
 			boolean childrenNeedChange = false;
 			if (entity.isNew()) {
-				FlushMode mode = session.getFlushMode();
-				session.setFlushMode(FlushMode.MANUAL);
+				FlushMode mode = session.getHibernateFlushMode();
+				session.setHibernateFlushMode(FlushMode.MANUAL);
 				entity.setFullId("");
 				session.save(entity);
 				session.flush();
-				session.setFlushMode(mode);
+				session.setHibernateFlushMode(mode);
 			} else {
 				childrenNeedChange = (entity.getParent() == null && entity.getLevel() != 1
 						|| entity.getParent() != null && (entity.getLevel() - entity.getParent().getLevel() != 1
@@ -225,8 +229,13 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 	public boolean exists(Serializable id) {
 		if (id == null)
 			return false;
-		return (Long) sessionFactory.getCurrentSession().createCriteria(getEntityClass()).add(Restrictions.eq("id", id))
-				.setProjection(Projections.rowCount()).uniqueResult() > 0;
+		CriteriaBuilder cb = sessionFactory.getCriteriaBuilder();
+		CriteriaQuery<Long> cq = cb.createQuery(Long.class);
+		Root<?> root = cq.from(getEntityClass());
+		cq.select(cb.count(cq.from(getEntityClass())));
+		cq.where(cb.equal(root.get("id"), id));
+		Query<Long> query = sessionFactory.getCurrentSession().createQuery(cq);
+		return query.uniqueResult() > 0;
 	}
 
 	@Override
@@ -397,55 +406,58 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 	@Override
 	@Transactional(readOnly = true)
 	public List<T> findAll(Order... orders) {
-		Criteria c = sessionFactory.getCurrentSession().createCriteria(getEntityClass());
-		c.setResultTransformer(CriteriaSpecification.DISTINCT_ROOT_ENTITY);
+		CriteriaBuilder cb = sessionFactory.getCriteriaBuilder();
+		CriteriaQuery<T> cq = cb.createQuery(getEntityClass());
+		Root<?> root = cq.from(getEntityClass());
 		if (orders.length == 0) {
 			if (Ordered.class.isAssignableFrom(getEntityClass()))
-				c.addOrder(Order.asc("displayOrder"));
-		} else
-			for (Order order : orders)
-				c.addOrder(order);
-		return c.list();
+				cq.orderBy(cb.asc(root.get("displayOrder")));
+		} else {
+			javax.persistence.criteria.Order[] _orders = new javax.persistence.criteria.Order[orders.length];
+			for (int i = 0; i < orders.length; i++)
+				_orders[i] = orders[i].isAscending() ? cb.asc(root.get(orders[i].getPropertyName()))
+						: cb.desc(root.get(orders[i].getPropertyName()));
+			cq.orderBy(_orders);
+		}
+		return sessionFactory.getCurrentSession().createQuery(cq).list();
 	}
 
 	@Override
 	@Transactional(readOnly = true)
 	public T findByNaturalId(Serializable... objects) {
-		Criteria c = constructCriteria(true, objects);
-		if (c == null)
+		Query<T> query = constructQuery(getEntityClass(), true, objects);
+		if (query == null)
 			return null;
-		c.setMaxResults(1);
-		return (T) c.uniqueResult();
+		query.setMaxResults(1);
+		return query.uniqueResult();
 	}
 
 	@Override
 	@Transactional(readOnly = true)
 	public boolean existsNaturalId(Serializable... objects) {
-		Criteria c = constructCriteria(true, objects);
-		if (c == null)
+		Query<Long> query = constructQuery(Long.class, true, objects);
+		if (query == null)
 			return false;
-		c.setProjection(Projections.rowCount());
-		return ((Long) c.uniqueResult()) > 0;
+		return query.uniqueResult() > 0;
 	}
 
 	@Override
 	@Transactional(readOnly = true)
 	public T findOne(Serializable... objects) {
-		Criteria c = constructCriteria(false, objects);
-		if (c == null)
+		Query<T> query = constructQuery(getEntityClass(), false, objects);
+		if (query == null)
 			return null;
-		c.setMaxResults(1);
-		return (T) c.uniqueResult();
+		query.setMaxResults(1);
+		return query.uniqueResult();
 	}
 
 	@Override
 	@Transactional(readOnly = true)
 	public boolean existsOne(Serializable... objects) {
-		Criteria c = constructCriteria(false, objects);
-		if (c == null)
+		Query<Long> query = constructQuery(Long.class, false, objects);
+		if (query == null)
 			return false;
-		c.setProjection(Projections.rowCount());
-		return ((Long) c.uniqueResult()) > 0;
+		return query.uniqueResult() > 0;
 	}
 
 	@Override
@@ -453,11 +465,11 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 	public T findOne(boolean caseInsensitive, Serializable... objects) {
 		if (!caseInsensitive)
 			return findOne(objects);
-		Query query = constructLowerQuery(false, objects);
+		Query<T> query = constructLowerQuery(getEntityClass(), objects);
 		if (query == null)
 			return null;
 		query.setMaxResults(1);
-		return (T) query.uniqueResult();
+		return query.uniqueResult();
 	}
 
 	@Override
@@ -465,10 +477,10 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 	public boolean existsOne(boolean caseInsensitive, Serializable... objects) {
 		if (!caseInsensitive)
 			return existsOne(objects);
-		Query query = constructLowerQuery(true, objects);
+		Query<Long> query = constructLowerQuery(Long.class, objects);
 		if (query == null)
 			return false;
-		return (Long) query.uniqueResult() > 0;
+		return query.uniqueResult() > 0;
 	}
 
 	private static Serializable[] transform(Serializable... objects) {
@@ -487,19 +499,25 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 		return objects;
 	}
 
-	private Criteria constructCriteria(boolean checkNaturalId, Serializable... objects) {
+	private <X> Query<X> constructQuery(Class<X> resultType, boolean checkNaturalId, Serializable... objects) {
 		objects = transform(objects);
 		if (objects == null)
 			return null;
-		Criteria c = sessionFactory.getCurrentSession().createCriteria(getEntityClass());
+		CriteriaBuilder cb = sessionFactory.getCriteriaBuilder();
+		CriteriaQuery<X> cq = cb.createQuery(resultType);
+		Root<X> root = (Root<X>) cq.from(getEntityClass());
+		if (resultType == Long.class)
+			((CriteriaQuery<Long>) cq).select(cb.count(cq.from(getEntityClass())));
+		else
+			cq.select(root);
 		Set<String> naturalIds = AnnotationUtils.getAnnotatedPropertyNames(getEntityClass(), NaturalId.class);
 		if (objects.length == 1) {
 			if (naturalIds.size() != 1)
 				throw new IllegalArgumentException("@NaturalId must and only be one");
-			c.add(Restrictions.eq(naturalIds.iterator().next(), objects[0]));
+			cq.where(cb.equal(root.get(naturalIds.iterator().next()), objects[0]));
 		} else {
 			if (objects.length == 0 || objects.length % 2 != 0)
-				throw new IllegalArgumentException("Parameter size must be even");
+				throw new IllegalArgumentException("parameter size must be even");
 			int doubles = objects.length / 2;
 			if (checkNaturalId && naturalIds.size() != doubles)
 				throw new IllegalArgumentException("Parameter pair size should equals to @NaturalId size");
@@ -508,20 +526,20 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 				if (checkNaturalId && !naturalIds.contains(name))
 					throw new IllegalArgumentException(
 							getEntityClass().getName() + "." + name + " should annotate @NaturalId");
-				c.add(Restrictions.eq(name, objects[2 * i + 1]));
+				cq.where(cb.equal(root.get(name), objects[2 * i + 1]));
 			}
 		}
-		return c;
+		return sessionFactory.getCurrentSession().createQuery(cq);
 	}
 
-	private Query constructLowerQuery(boolean count, Serializable... objects) {
+	private <X> Query<X> constructLowerQuery(Class<X> resultType, Serializable... objects) {
 		objects = transform(objects);
 		if (objects == null)
 			return null;
 		String hql = "from " + getEntityClass().getName() + " entity where ";
-		if (count)
+		if (resultType == Long.class)
 			hql = "select count(entity) " + hql;
-		Query query;
+		Query<X> query;
 		if (objects.length == 1) {
 			Set<String> naturalIds = AnnotationUtils.getAnnotatedPropertyNames(getEntityClass(), NaturalId.class);
 			if (naturalIds.size() != 1)
@@ -530,8 +548,6 @@ public abstract class BaseManagerImpl<T extends Persistable<?>> implements BaseM
 			query = sessionFactory.getCurrentSession().createQuery(hql);
 			query.setParameter("1", objects[0]);
 		} else {
-			if (objects.length == 0 || objects.length % 2 != 0)
-				throw new IllegalArgumentException("parameter size must be even");
 			int doubles = objects.length / 2;
 			if (doubles == 1) {
 				hql += "lower(entity." + String.valueOf(objects[0]) + ")=lower(?1)";
