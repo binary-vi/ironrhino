@@ -318,9 +318,7 @@ public class EntityClassHelper {
 							uci.setMultiple(true);
 							returnType = clazz;
 							uci.setPropertyType(returnType);
-							if (clazz.isEnum() || "dictionary".equals(uci.getType()))
-								uci.addCssClass("custom");
-							else if (!"dictionary".equals(uci.getType()))
+							if (!"dictionary".equals(uci.getType()))
 								uci.addCssClass("tags");
 						} else if (Number.class.isAssignableFrom(clazz)) {
 							uci.setMultiple(true);
@@ -332,7 +330,6 @@ public class EntityClassHelper {
 						uci.setMultiple(true);
 						returnType = elementType;
 						uci.setPropertyType(returnType);
-						uci.addCssClass("custom");
 					}
 					if (uci.isMultiple() && StringUtils.isBlank(uci.getTemplate())) {
 						if (uci.getType().equals("dictionary")) {
